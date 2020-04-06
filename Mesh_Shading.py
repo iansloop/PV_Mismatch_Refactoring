@@ -57,6 +57,7 @@ natural_irrad = np.array([inital_irr, 0.74796, 0.703228035, 0.752545, 0.75282, 0
 
 # input experimental data for Pmp, Vmp, Imp
 MPPT_X_exp = pd.read_excel(r'C:\Users\isloop\OneDrive for Business\Desktop\PVMismatch_Resources\NGT_XSERIES_POWER.xlsx')
+MPPT_A_exp = pd.read_excel(r'C:\Users\isloop\OneDrive for Business\Desktop\PVMismatch_Resources\A_SERIES_STRING_POWER.xlsx')
 
 # pull dc monitoring data from the east so that the power from the west can be normalized to it
 East_DC_Power = pd.read_excel(
@@ -129,6 +130,8 @@ NRBD = 3.926
 ALPHA_ISC = 0.0003551
 CELLAREA = 153.33
 EG = 1.166
+'''
+VRBD = np.float64(VRBD)
 # Create PV system with inital irradiance and temperature
 pvcell_X = pvcell.PVcell(Rs=RS, Rsh=RSH, Isat1_T0=ISAT1_T0, Isat2_T0=ISAT2_T0,
                          Isc0_T0=ISC0_T0, aRBD=ARBD, bRBD=BRBD, VRBD=VRBD,
@@ -164,6 +167,8 @@ for i in range(0, 9):
 
     #update natural irradiance on the unshaded control module, string 2, module 3
     pvsys_X.setSuns({1: {2: natural_irrad[i+1]}})
+    #update cell temperatures
+    pvsys_X.setTemps(temp_array_X[i])
 
     if i == 0:
         pvsys_X.setSuns({0: {1: {'cells': module_columns_X[0], 'Ee': (irrad_pattern_X[i+1],) * 12}}})
@@ -191,15 +196,17 @@ MPPT_X_exp['Type_E_norm'] = MPPT_X_exp['W6 Type E'] / East_DC_Power['Power E6 Ty
 # error_X = (MPPT_X['Pmp']-MPPT_X_experimental)/MPPT_X_experimental*100
 
 # plot Pmp
-plt.figure(1)
+plt.figure()
 plt.plot(ten_min_interval - pd.Timedelta(minutes=5), MPPT_X['Pmp_norm'], 'b*', label='PV Mismatch')
 plt.plot(MPPT_X_exp['Timestamps'], MPPT_X_exp['Type_D_norm'], '--', label='Type D')
 plt.plot(MPPT_X_exp['Timestamps'], MPPT_X_exp['Type_E_norm'], label='Type E')
 # plt.plot(error_X,label='Error (%)')
 plt.legend()
+plt.title('X-Series Type E and D Module')
 plt.xlabel('Test Interval')
 plt.xticks(ten_min_interval, time_axis)
 plt.ylabel('Normalized DC Power (Respectively)')
+plt.yticks(np.array([0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]))
 plt.grid(True)
 #
 # # plot Imp
@@ -229,7 +236,7 @@ plt.grid(True)
 # pvsys_X.pvmods[0][1].plotMod()
 # pvsys_X.plotSys()
 
-'''
+
     #A series
 #A series (NGT) cell and module properties
 ISC0_T0=10.2
@@ -249,61 +256,108 @@ pvcell_A = pvcell.PVcell(Rs=RS, Rsh=RSH, Isat1_T0=ISAT1_T0, Isat2_T0=ISAT2_T0,
                  Isc0_T0=ISC0_T0, aRBD=ARBD, VRBD=VRBD,
                  nRBD=NRBD, Eg=EG, alpha_Isc=ALPHA_ISC)
 pvmodule_A = pvmodule.PVmodule(cell_pos=pvmodule.standard_cellpos_pat(11,[6]), Vbypass=VRBD, pvcells=pvcell_A, cellArea=cellArea)
-pvsys_A = pvsystem.PVsystem(numberStrs=2,numberMods=4,pvmods=pvmodule_A)
+pvsys_A = pvsystem.PVsystem(numberStrs=1,numberMods=4,pvmods=pvmodule_A)
+pvsys_A_control = pvsystem.PVsystem(numberStrs=1,numberMods=4,pvmods=pvmodule_A)
 plt.ion()
 pvsys_A.setSuns(inital_irr)
+pvsys_A_control.setSuns(inital_irr)
 pvsys_A.setTemps(nominal_temp_A)
+pvsys_A_control.setTemps(nominal_temp_A)
 
-#shade last module in both strings completely
-#pvsys_A.setSuns({0: {3:plastic_shaded*inital_irr}, 1: {3:plastic_shaded*inital_irr}})
+# shade the two modules at the ends of pvsys_A to simulate the plastic shading
 #per Chetan's recommendation, don't set suns lower than 0.01
-pvsys_A.setSuns({0: {3:0.01}, 1: {3:0.01}})
+pvsys_A.setSuns({0: {0:inital_irr*plastic_shaded, 3:inital_irr*plastic_shaded}})
 
-
-#record initial power
-MPPT_A = []
-MPPT_A.append(pvsys_A.Pmp)
+# record initial Pmp, Imp, Vmp (AC-String level). First String is shaded, second string is unshaded control
+MPPT_A = pd.DataFrame(
+    columns=['Pmp', 'Pmp_control', 'Pmp_norm', 'Vmp', 'Vmp_control', 'Vmp_norm', 'Imp', 'Imp_control', 'Imp_norm'],
+    index=range(0, 10))
+MPPT_A.iloc[0] = {'Pmp': sum([pvsys_A.pvmods[0][j].Pmod.max() for j in range(0,4)]), 'Vmp': pvsys_A.Vmp,
+                  'Imp': pvsys_A.Imp,
+                  'Pmp_control': sum([pvsys_A_control.pvmods[0][j].Pmod.max() for j in range(0,4)]), 'Vmp_control': pvsys_A_control.Vmp,
+                  'Imp_control': pvsys_A_control.Imp}
 
 #shade cells, update temperatures, and record power for each phase of the test
 for i in range(0,9):
-    # update irradiance coming through doubled plastic cover as irradiance changes
-    pvsys_A.setSuns({0: {3: plastic_shaded * irrad_pattern_X[i]}, 1: {3: plastic_shaded * irrad_pattern_X[i]}})
+    # update irradiance on all cells in string 1, module 2 and 3 (mesh shaded modules)
+    pvsys_A.setSuns(
+        {0: {1: {'cells': tuple(range(0, 66)),
+                 'Ee': tuple([pvsys_A.pvmods[0][1].Ee[j][0] * natural_irrad[i + 1] / natural_irrad[i] for j in
+                              range(0, 66)])},
+             2: {'cells': tuple(range(0, 66)),
+                 'Ee': tuple([pvsys_A.pvmods[0][2].Ee[j][0] * natural_irrad[i + 1] / natural_irrad[i] for j in
+                              range(0, 66)])}}})
+
+    #update irradiance on string 1, modules 1 and 4 (plastic shaded modules), and string 2 (unshaded string)
+    pvsys_A.setSuns({0: {0: natural_irrad[i+1]*plastic_shaded, 3: natural_irrad[i+1]*plastic_shaded}})
+    pvsys_A_control.setSuns(natural_irrad[i+1])
+
     if i == 0 or i == 1:
-        pvsys_A.setSuns({0: {2: [(irrad_pattern_A[i],)*11,module_columns_A[-1]]},
-                         1: {2: [(irrad_pattern_A[i],)*11,module_columns_A[-1]]}})
+        pvsys_A.setSuns({0: {1: [(irrad_pattern_A[i+1],)*11,module_columns_A[-1]],
+                         2: [(irrad_pattern_A[i+1],)*11,module_columns_A[-1]]}})
     elif i == 4 or i == 5:
-        pvsys_A.setSuns({0: {2: [(full_mesh_shade[i],) * 11, module_columns_A[-3]]},
-                         1: {2: [(full_mesh_shade[i],) * 11, module_columns_A[-3]]}})
-        pvsys_A.setSuns({0: {2: [(irrad_pattern_A[i],) * 11, module_columns_A[-4]]},
-                         1: {2: [(irrad_pattern_A[i],) * 11, module_columns_A[-4]]}})
+        pvsys_A.setSuns({0: {1: [(full_mesh_shade[i+1],) * 11, module_columns_A[-3]],
+                         2: [(full_mesh_shade[i+1],) * 11, module_columns_A[-3]]}})
+        pvsys_A.setSuns({0: {1: [(irrad_pattern_A[i+1],) * 11, module_columns_A[-4]],
+                         2: [(irrad_pattern_A[i+1],) * 11, module_columns_A[-4]]}})
     elif i == 6 or i == 7:
-        pvsys_A.setSuns({0: {2: [(full_mesh_shade[i],) * 11, module_columns_A[-i+2]]},
-                         1: {2: [(full_mesh_shade[i],) * 11, module_columns_A[-i+2]]}})
-        pvsys_A.setSuns({0: {2: [(irrad_pattern_A[i],) * 11, module_columns_A[-i+1]]},
-                         1: {2: [(irrad_pattern_A[i],) * 11, module_columns_A[-i+1]]}})
+        pvsys_A.setSuns({0: {1: [(full_mesh_shade[i+1],) * 11, module_columns_A[-i+2]],
+                         2: [(full_mesh_shade[i+1],) * 11, module_columns_A[-i+2]]}})
+        pvsys_A.setSuns({0: {1: [(irrad_pattern_A[i+1],) * 11, module_columns_A[-i+1]],
+                         2: [(irrad_pattern_A[i+1],) * 11, module_columns_A[-i+1]]}})
     elif i == 8:
-        pvsys_A.setSuns({0: {2: [(full_mesh_shade[i],) * 11, module_columns_A[-i + 2]]},
-                         1: {2: [(full_mesh_shade[i],) * 11, module_columns_A[-i + 2]]}})
+        pvsys_A.setSuns({0: {1: [(full_mesh_shade[i+1],) * 11, module_columns_A[-i + 2]],
+                         2: [(full_mesh_shade[i+1],) * 11, module_columns_A[-i + 2]]}})
     else:
-        pvsys_A.setSuns({0: {2: [(full_mesh_shade[i],) * 11, module_columns_A[-i+1]]},
-                         1: {2: [(full_mesh_shade[i],) * 11, module_columns_A[-i+1]]}})
-        pvsys_A.setSuns({0: {2: [(irrad_pattern_A[i],) * 11, module_columns_A[-i]]},
-                         1: {2: [(irrad_pattern_A[i],) * 11, module_columns_A[-i]]}})
+        pvsys_A.setSuns({0: {1: [(full_mesh_shade[i+1],) * 11, module_columns_A[-i+1]],
+                         2: [(full_mesh_shade[i+1],) * 11, module_columns_A[-i+1]]}})
+        pvsys_A.setSuns({0: {1: [(irrad_pattern_A[i+1],) * 11, module_columns_A[-i]],
+                         2: [(irrad_pattern_A[i+1],) * 11, module_columns_A[-i]]}})
     pvsys_A.setTemps(temp_array_A[i])
-    MPPT_A.append(pvsys_A.Pmp)
+    pvsys_A_control.setTemps(temp_array_A[i])
+
+    MPPT_A.iloc[i + 1] = {'Pmp': sum([pvsys_A.pvmods[0][j].Pmod.max() for j in range(0,4)]), 'Vmp': pvsys_A.Vmp,
+                  'Imp': pvsys_A.Imp,
+                  'Pmp_control': sum([pvsys_A_control.pvmods[0][j].Pmod.max() for j in range(0,4)]), 'Vmp_control': pvsys_A_control.Vmp,
+                  'Imp_control': pvsys_A_control.Imp}
+
+    MPPT_A['Pmp_norm'] = MPPT_A['Pmp'] / MPPT_A['Pmp_control']
+    MPPT_A['Vmp_norm'] = MPPT_A['Vmp'] / MPPT_A['Vmp_control']
+    MPPT_A['Imp_norm'] = MPPT_A['Imp'] / MPPT_A['Imp_control']
+
+    MPPT_A_exp['A_series_norm'] = MPPT_A_exp['SPDA.RND.ACM_ROOF.Power_4'] / MPPT_A_exp['SPDA.RND.ACM_ROOF.Power_3']
 '''
 # plotting
 '''
-MPPT_A_experimental = np.array([506.465182,400.882196,332.6838467,304.707138,232.7229941,217.095214,209.072656,202.431444,188.462066,182.377072])
-error_A = (MPPT_A-MPPT_A_experimental)/MPPT_A_experimental*100
-plt.figure(1)
-plt.plot(MPPT_A,label='PV Mismatch')
-plt.plot(MPPT_A_experimental,label='Experimental')
-plt.plot(error_A,label='Error (%)')
+# MPPT_A_experimental = np.array([506.465182,400.882196,332.6838467,304.707138,232.7229941,217.095214,209.072656,202.431444,188.462066,182.377072])
+# error_A = (MPPT_A-MPPT_A_experimental)/MPPT_A_experimental*100
+plt.figure()
+plt.plot(ten_min_interval - pd.Timedelta(minutes=5), MPPT_A['Pmp_norm'], 'bo', label='PV Mismatch')
+plt.plot(MPPT_A_exp['Timestamps'], MPPT_A_exp['A_series_norm'], label='A Series (NGT)')
+# plt.plot(error_X,label='Error (%)')
 plt.legend()
+plt.title('4-Module String of NGT AC')
 plt.xlabel('Test Interval')
-plt.ylabel('DC Power (W)')
-'''
+plt.xticks(ten_min_interval, time_axis)
+plt.ylabel('Normalized AC String Power (Respectively)')
+plt.yticks(np.array([0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]))
+plt.grid(True)
+
+plt.figure()
+plt.plot(ten_min_interval - pd.Timedelta(minutes=5), MPPT_A['Pmp'], 'bo', label='PV Mismatch Pmp')
+plt.plot(ten_min_interval - pd.Timedelta(minutes=5), MPPT_A['Pmp_control'], 'b*', label='PV Mismatch Pmp_control')
+plt.plot(MPPT_A_exp['Timestamps'], MPPT_A_exp['SPDA.RND.ACM_ROOF.Power_4']*1000, label='Pmp')
+plt.plot(MPPT_A_exp['Timestamps'], MPPT_A_exp['SPDA.RND.ACM_ROOF.Power_3']*1000, label='Pmp_control')
+plt.legend()
+
+plt.xlabel('Test Interval')
+plt.xticks(ten_min_interval, time_axis)
+plt.ylabel('AC String Power')
+plt.grid(True)
+
+sample_A = MPPT_A_exp['SPDA.RND.ACM_ROOF.Power_4'].iloc[15:115:10]*1000
+error_A = np.abs((np.array([j for j in sample_A]) - np.array([i for i in MPPT_A['Pmp']]))/np.array([j for j in sample_A]))*100
+
 # pvsys_A.pvmods[0][3].plotMod()
 # pvsys_A.pvmods[0][0].plotMod()
 # pvsys_A.plotSys()
