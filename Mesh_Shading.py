@@ -7,11 +7,16 @@ import pandas as pd
 def plot_mod_cell_ee(arr, landscape=True):
     from matplotlib import pyplot as plt
     if landscape:
-        M = np.reshape(arr, (8, 12))[::-1]
-        M[1::2, :] = M[1::2, ::-1]
+        try:
+            M = np.reshape(arr, (8, 12))[::-1]
+            M[1::2, :] = M[1::2, ::-1]
+        except:
+            M = np.reshape(arr, (6, 11))[::-1]
+            M[1::2, :] = M[1::2, ::-1]
     else:
         M = np.reshape(arr, (12, 8))[::-1]
         M[1::2, :] = M[1::2, ::-1]
+
     plt.matshow(M)
     plt.title('bit plot of cell illumination')
 
